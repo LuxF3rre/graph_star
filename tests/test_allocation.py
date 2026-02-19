@@ -598,7 +598,7 @@ class TestGreedyWalk:
         assert result.distance == Decimal("0")
 
 
-class TestGreedOptimizationWalk:
+class TestGreedyOptimizationWalk:
     def test_does_not_worsen_optimal_allocation(
         self,
         simple_target_graph: nx.DiGraph,
