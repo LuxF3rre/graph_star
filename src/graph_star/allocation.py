@@ -4,7 +4,7 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
-from itertools import combinations
+from itertools import combinations, count
 from random import Random
 from typing import Final, NewType
 
@@ -512,7 +512,7 @@ def greedy_optimization_walk(
     target_leaves: list[str],
     source_graph: nx.DiGraph,
     exclude_source_leaves: list[str] | None = None,
-    max_iterations: int = 1000,
+    max_iterations: int | None = 1000,
 ) -> AllocationWithContext:
     """Optimize an allocation through move, swap, delete, and add strategies.
 
@@ -528,6 +528,7 @@ def greedy_optimization_walk(
         source_graph: The source graph built by `create_graph`.
         exclude_source_leaves: Source leaves to exclude from optimization.
         max_iterations: Maximum optimization iterations before stopping.
+            ``None`` removes the limit, iterating until convergence.
 
     Returns:
         Optimized allocation result.
@@ -556,7 +557,8 @@ def greedy_optimization_walk(
             ),
         )
 
-    for _ in range(max_iterations):
+    iterator = range(max_iterations) if max_iterations is not None else count()
+    for _ in iterator:
         cached_inverted = invert_to_source_target(
             allocations=previous_best_proposed_allocations
         )
