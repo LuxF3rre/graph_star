@@ -805,9 +805,9 @@ class TestSimulatedAnnealingWalk:
             source_graph=simple_source_graph,
             source_leaves=simple_source_leaves,
             seed=123,
-            temperature=0.5,
-            cooling_rate=0.9,
-            min_temperature=0.1,
+            temperature=Decimal("0.5"),
+            cooling_rate=Decimal("0.9"),
+            min_temperature=Decimal("0.1"),
             iterations_per_temp=10,
         )
         assert result.distance >= Decimal("0")
@@ -850,8 +850,8 @@ class TestSimulatedAnnealingWalk:
             source_graph=simple_source_graph,
             source_leaves=simple_source_leaves,
             seed=42,
-            temperature=0.1,
-            min_temperature=0.05,
+            temperature=Decimal("0.1"),
+            min_temperature=Decimal("0.05"),
             iterations_per_temp=5,
         )
         assert isinstance(result.unallocated_source_leaves, frozenset)
@@ -895,8 +895,8 @@ class TestSimulatedAnnealingWalk:
             source_graph=source,
             source_leaves=["s1"],
             seed=42,
-            temperature=0.1,
-            min_temperature=0.05,
+            temperature=Decimal("0.1"),
+            min_temperature=Decimal("0.05"),
             iterations_per_temp=5,
         )
         assert result.distance >= Decimal("0")

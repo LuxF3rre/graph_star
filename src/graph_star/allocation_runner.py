@@ -1,5 +1,7 @@
 """High-level pipelines that chain allocation walk steps."""
 
+from decimal import Decimal
+
 import networkx as nx
 
 from graph_star.allocation import (
@@ -71,9 +73,9 @@ def run_annealing_pipeline(
     source_graph: nx.DiGraph,
     source_leaves: list[str],
     max_group_size: int | None = 4,
-    temperature: float = 1.0,
-    cooling_rate: float = 0.95,
-    min_temperature: float = 0.01,
+    temperature: Decimal = Decimal("1"),
+    cooling_rate: Decimal = Decimal("0.95"),
+    min_temperature: Decimal = Decimal("0.01"),
     iterations_per_temp: int = 100,
     seed: int | None = None,
 ) -> AllocationWithContext:
