@@ -1,8 +1,10 @@
 """Tests for graph_star.allocation_runner module."""
 
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 import networkx as nx
+import numpy as np
 import pytest
 
 import graph_star
@@ -13,7 +15,11 @@ from graph_star.allocation import (
     greedy_walk,
     leaf_nodes,
 )
-from graph_star.allocation_runner import run_annealing_pipeline, run_greedy_pipeline
+from graph_star.allocation_runner import (
+    run_annealing_pipeline,
+    run_greedy_pipeline,
+    run_semantic_pipeline,
+)
 
 
 @pytest.fixture
@@ -326,6 +332,67 @@ class TestRunAnnealingPipeline:
         assert isinstance(result, AllocationWithContext)
 
 
+class TestRunSemanticPipeline:
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_produces_valid_allocation(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            rng = np.random.default_rng(42)
+            emb = rng.random((n, 64)).astype(np.float32)
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            return emb / norms
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_semantic_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            similarity_threshold=0.0,
+        )
+        assert isinstance(result, AllocationWithContext)
+        assert result.distance >= Decimal("0")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_model_name_forwarded(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        run_semantic_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            model_name="custom/model",
+            similarity_threshold=0.0,
+        )
+        mock_load_st.assert_called_with("custom/model")
+
+
 class TestTopLevelImports:
     """Verify new symbols accessible from package root."""
 
@@ -334,3 +401,6 @@ class TestTopLevelImports:
 
     def test_run_annealing_pipeline_accessible(self) -> None:
         assert hasattr(graph_star, "run_annealing_pipeline")
+
+    def test_run_semantic_pipeline_accessible(self) -> None:
+        assert hasattr(graph_star, "run_semantic_pipeline")

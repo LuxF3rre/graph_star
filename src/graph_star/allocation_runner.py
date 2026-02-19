@@ -11,8 +11,17 @@ from graph_star.allocation import (
     greedy_walk,
     simulated_annealing_walk,
 )
+from graph_star.semantic_allocation import (
+    compute_embeddings,
+    compute_similarity_matrix,
+    semantic_walk,
+)
 
-__all__ = ["run_annealing_pipeline", "run_greedy_pipeline"]
+__all__ = [
+    "run_annealing_pipeline",
+    "run_greedy_pipeline",
+    "run_semantic_pipeline",
+]
 
 
 def run_greedy_pipeline(
@@ -23,7 +32,7 @@ def run_greedy_pipeline(
     source_leaves: list[str],
     max_group_size: int | None = 4,
     exclude_source_leaves: list[str] | None = None,
-    max_iterations: int = 1000,
+    max_iterations: int | None = 1000,
 ) -> AllocationWithContext:
     """Run exact_walk -> greedy_walk -> greedy_optimization_walk.
 
@@ -123,4 +132,52 @@ def run_annealing_pipeline(
         min_temperature=min_temperature,
         iterations_per_temp=iterations_per_temp,
         seed=seed,
+    )
+
+
+def run_semantic_pipeline(
+    *,
+    target_graph: nx.DiGraph,
+    target_leaves: list[str],
+    source_graph: nx.DiGraph,
+    source_leaves: list[str],
+    model_name: str = "BAAI/bge-large-en-v1.5",
+    similarity_threshold: float = 0.75,
+) -> AllocationWithContext:
+    """Run embedding-only semantic allocation pipeline.
+
+    Computes sentence embeddings for source and target leaf names, builds
+    a cosine similarity matrix, and allocates by best match above the
+    threshold.
+
+    Args:
+        target_graph: The target graph built by ``create_graph``.
+        target_leaves: Names of the target leaf nodes.
+        source_graph: The source graph built by ``create_graph``.
+        source_leaves: Names of the source leaf nodes.
+        model_name: HuggingFace bi-encoder model identifier.
+        similarity_threshold: Minimum cosine similarity for allocation.
+
+    Returns:
+        Allocation result with semantically matched leaves.
+    """
+    source_emb = compute_embeddings(
+        labels=source_leaves,
+        model_name=model_name,
+    )
+    target_emb = compute_embeddings(
+        labels=target_leaves,
+        model_name=model_name,
+    )
+    sim = compute_similarity_matrix(
+        source_embeddings=source_emb,
+        target_embeddings=target_emb,
+    )
+    return semantic_walk(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        similarity_matrix=sim,
+        similarity_threshold=similarity_threshold,
     )
