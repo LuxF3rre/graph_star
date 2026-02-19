@@ -240,9 +240,9 @@ class TestRunAnnealingPipeline:
             source_graph=mismatched_source_graph,
             source_leaves=mismatched_source_leaves,
             seed=42,
-            temperature=2.0,
-            cooling_rate=0.9,
-            min_temperature=0.01,
+            temperature=Decimal("2"),
+            cooling_rate=Decimal("0.9"),
+            min_temperature=Decimal("0.01"),
             iterations_per_temp=50,
         )
         assert pipeline_result.distance <= greedy_result.distance
@@ -300,9 +300,9 @@ class TestRunAnnealingPipeline:
             target_leaves=simple_target_leaves,
             source_graph=simple_source_graph,
             source_leaves=simple_source_leaves,
-            temperature=0.5,
-            cooling_rate=0.8,
-            min_temperature=0.1,
+            temperature=Decimal("0.5"),
+            cooling_rate=Decimal("0.8"),
+            min_temperature=Decimal("0.1"),
             iterations_per_temp=10,
             seed=42,
         )
