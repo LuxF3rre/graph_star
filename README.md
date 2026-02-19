@@ -9,7 +9,7 @@
 
 Graph-based allocation optimizer for mapping hierarchical financial reports between accounting conventions (e.g. GAAP to IFRS).
 
-Financial statements like balance sheets and P&L reports are hierarchical: leaf accounts roll up through intermediate groupings into top-level totals. When converting between conventions, the chart-of-accounts structure differs and leaf accounts don't map one-to-one. **graph_star** finds the allocation of source leaf accounts to target leaf accounts that minimizes the total distance across all levels of the hierarchy.
+Financial statements like balance sheets and P&L reports are hierarchical: leaf accounts roll up through intermediate groupings into top-level totals. When converting between conventions, the chart-of-accounts structure differs and leaf accounts don't map one-to-one. **graph_star** finds the allocation of source leaf accounts to target leaf accounts that minimizes the total distance across all levels of the hierarchy. The search space is combinatorial — with 50 source accounts and 30 target accounts there are 30⁵⁰ possible assignments — so brute force is out of the question and the library uses a pipeline of heuristics instead.
 
 ## How it works
 
@@ -98,6 +98,10 @@ result = run_annealing_pipeline(
 ### Data quality
 
 The optimizer takes node values at face value. If the input graphs contain incorrect balances, stale data, or rounding artefacts, the resulting allocation will faithfully minimise distance against those wrong numbers. Validate and reconcile source and target data before feeding it into the pipeline.
+
+### Non-distinguishable leaves
+
+Source leaves whose value is zero cannot be meaningfully attributed: assigning them to any target leaf produces no distance change, so the optimiser's placement is arbitrary. Similarly, source leaves that share the same value are interchangeable — swapping them between targets produces identical distances — so the specific assignment among equal-valued leaves is not unique.
 
 ### Hierarchy granularity
 
