@@ -16,12 +16,27 @@ from graph_star.allocation import (
     leaf_nodes,
     simulated_annealing_walk,
 )
-from graph_star.allocation_runner import run_annealing_pipeline, run_greedy_pipeline
+from graph_star.allocation_runner import (
+    run_annealing_pipeline,
+    run_greedy_pipeline,
+    run_semantic_pipeline,
+)
+from graph_star.semantic_allocation import (
+    Embeddings,
+    SimilarityMatrix,
+    compute_embeddings,
+    compute_similarity_matrix,
+    semantic_walk,
+)
 
 __all__ = [
     "AllocationWithContext",
+    "Embeddings",
+    "SimilarityMatrix",
     "SourceToTargetAllocations",
     "TargetToSourceAllocations",
+    "compute_embeddings",
+    "compute_similarity_matrix",
     "create_graph",
     "distance",
     "evaluate_target_rollups",
@@ -36,5 +51,7 @@ __all__ = [
     "leaf_nodes",
     "run_annealing_pipeline",
     "run_greedy_pipeline",
+    "run_semantic_pipeline",
+    "semantic_walk",
     "simulated_annealing_walk",
 ]
