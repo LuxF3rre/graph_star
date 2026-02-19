@@ -5,7 +5,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import combinations
-from math import exp
 from random import Random
 from typing import Final, NewType
 
@@ -716,9 +715,9 @@ def simulated_annealing_walk(
     target_leaves: list[str],
     source_graph: nx.DiGraph,
     source_leaves: list[str],
-    temperature: float = 1.0,
-    cooling_rate: float = 0.95,
-    min_temperature: float = 0.01,
+    temperature: Decimal = Decimal("1"),
+    cooling_rate: Decimal = Decimal("0.95"),
+    min_temperature: Decimal = Decimal("0.01"),
     iterations_per_temp: int = 100,
     seed: int | None = None,
 ) -> AllocationWithContext:
@@ -727,12 +726,6 @@ def simulated_annealing_walk(
     Randomly applies move, swap, delete, and add operations, accepting
     worse solutions with a probability that decreases as the temperature
     cools, allowing escape from local minima.
-
-    Note:
-        Temperature parameters use `float` arithmetic. The acceptance
-        probability computation intentionally converts `Decimal` distances
-        to `float` because simulated annealing is inherently approximate
-        and does not require financial-grade precision for its control logic.
 
     Args:
         starting_allocation: Initial allocation to refine.
@@ -836,9 +829,10 @@ def simulated_annealing_walk(
                 ),
             )
 
-            # Intentional float conversion: SA control logic is approximate
-            delta = float(proposed_distance - current_distance)
-            acceptance_probability = exp(-delta / current_temp) if delta > 0 else 1.0
+            delta = proposed_distance - current_distance
+            acceptance_probability = (
+                (-delta / current_temp).exp() if delta > 0 else Decimal("1")
+            )
 
             if rng.random() < acceptance_probability:
                 current_allocation = proposed_allocation
