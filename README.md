@@ -5,7 +5,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![ty](https://img.shields.io/badge/type%20checker-ty-blue.svg)](https://github.com/astral-sh/ty)
 [![Build](https://github.com/LuxF3rre/graph_star/actions/workflows/test.yml/badge.svg)](https://github.com/LuxF3rre/graph_star/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/LuxF3rre/graph_star/branch/main/graph/badge.svg)](https://codecov.io/gh/LuxF3rre/repo-graph_star)
+[![codecov](https://codecov.io/gh/LuxF3rre/graph_star/graph/badge.svg?token=L3vByKOARN)](https://codecov.io/gh/LuxF3rre/graph_star)
 
 Graph-based allocation optimizer for mapping hierarchical financial reports between accounting conventions (e.g. GAAP to IFRS).
 
