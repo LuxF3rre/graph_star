@@ -1,0 +1,87 @@
+[project]
+name = "graph_star"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "networkx>=3.4.2",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+lint.select = [
+    "A",
+    "ARG",
+    "B",
+    "C",
+    "DTZ",
+    "E",
+    "EM",
+    "F",
+    "FBT",
+    "I",
+    "ICN",
+    "ISC",
+    "N",
+    "PLC",
+    "PLE",
+    "PLR",
+    "PLW",
+    "Q",
+    "RUF",
+    "S",
+    "T",
+    "TID",
+    "UP",
+    "W",
+    "YTT",
+]
+lint.ignore = [
+    # Allow non-abstract empty methods in abstract base classes
+    "B027",
+    # Allow boolean positional values in function calls, like `dict.get(... True)`
+    "FBT003",
+    # Ignore checks for possible passwords
+    "S105",
+    "S106",
+    "S107",
+    # Ignore complexity
+    "C901",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "D211",    # no-blank-line-before-class
+    "D213",    # multi-line-summary-second-line
+    "ISC001",  # single-line-implicit-string-concatenation solved by formatter
+]
+lint.unfixable = [
+    # Don't touch unused imports
+    "F401",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["graph_star"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can use magic values, assertions, and relative imports
+"tests/**/*" = ["PLR2004", "S101", "TID252"]
+
+[tool.pytest.ini_options]
+pythonpath = "src"
+
+[dependency-groups]
+dev = [
+    "mutmut>=3.2.0",
+    "prek>=0.3.3",
+    "pytest>=8.3.3",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.5.0",
+    "ruff>=0.7.4",
+    "ty>=0.0.17",
+]
