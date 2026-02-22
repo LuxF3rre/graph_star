@@ -1,45 +1,90 @@
-[[repos]]
-repo = "https://github.com/pre-commit/pre-commit-hooks"
-rev = "v5.0.0"
-hooks = [
-  { id = "check-yaml" },
-  { id = "check-toml" },
-  { id = "check-json" },
-  { id = "end-of-file-fixer" },
-  { id = "trailing-whitespace" },
-  { id = "name-tests-test", args = ["--pytest-test-first"] },
-]
+exclude = '^\.claude/'
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.15.1"
+rev = "v0.15.2"
 hooks = [
   { id = "ruff-check", args = ["--fix"] },
   { id = "ruff-format" },
 ]
 
 [[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v6.0.0"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "name-tests-test", args = ["--pytest"] },
+  { id = "end-of-file-fixer" },
+  { id = "check-yaml" },
+  { id = "check-toml" },
+  { id = "check-added-large-files" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "ty",
+    name = "ty",
+    entry = "uv run ty check src tests",
+    language = "system",
+    types = ["python"],
+    pass_filenames = false,
+  },
+  {
+    id = "uv-export-requirements",
+    name = "uv export requirements",
+    entry = "uv export --no-hashes --no-dev -o requirements.txt",
+    language = "system",
+    files = '^(pyproject\.toml|uv\.lock)$',
+    pass_filenames = false,
+  },
+  {
+    id = "uv-export-requirements-dev",
+    name = "uv export requirements-dev",
+    entry = "uv export --no-hashes -o requirements-dev.txt",
+    language = "system",
+    files = '^(pyproject\.toml|uv\.lock)$',
+    pass_filenames = false,
+  },
+]
+
+[[repos]]
+repo = "https://github.com/sirosen/texthooks"
+rev = "0.7.1"
+hooks = [
+  { id = "alphabetize-codeowners" },
+  { id = "fix-smartquotes" },
+  { id = "fix-spaces" },
+  # { id = "fix-unicode-dashes" },
+  { id = "fix-ligatures" },
+  { id = "forbid-bidi-controls" },
+]
+
+[[repos]]
+repo = "https://github.com/codespell-project/codespell"
+rev = "v2.4.1"
+hooks = [
+  { id = "codespell" },
+]
+
+[[repos]]
 repo = "https://github.com/igorshubovych/markdownlint-cli"
-rev = "v0.44.0"
+rev = "v0.47.0"
 hooks = [
   { id = "markdownlint" },
 ]
 
 [[repos]]
-repo = "local"
+repo = "https://github.com/gitleaks/gitleaks"
+rev = "v8.30.0"
+hooks = [
+  { id = "gitleaks" },
+]
 
-[[repos.hooks]]
-id = "ty"
-name = "ty static analysis"
-language = "system"
-entry = "uv run ty check src"
-pass_filenames = false
-types = ["python"]
-
-[[repos.hooks]]
-id = "gitleaks"
-name = "Detect hardcoded secrets"
-language = "system"
-entry = "gitleaks git --pre-commit --redact --staged --verbose"
-pass_filenames = false
-always_run = true
+[[repos]]
+repo = "https://github.com/zizmorcore/zizmor-pre-commit"
+rev = "v1.22.0"
+hooks = [
+  { id = "zizmor" },
+]
