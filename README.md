@@ -24,7 +24,7 @@ Two families of allocation strategy are provided:
 Value-based heuristics meant to be composed in a pipeline:
 
 | Strategy | Purpose |
-|---|---|
+| --- | --- |
 | `exact_walk` | Match source leaves (or small groups) whose values equal a target leaf exactly. |
 | `greedy_walk` | Assign remaining sources one at a time to the target that reduces distance the most. |
 | `greedy_optimization_walk` | Iteratively move, swap, delete, or add allocations until no single-step improvement exists. |
@@ -37,7 +37,7 @@ A typical numerical pipeline runs exact matching first, feeds the result into th
 Name-based matching using sentence embeddings. Instead of optimizing by value, these strategies match source and target leaves by the similarity of their account names (e.g. "Revenue from operations" → "Operating income"). Sources below the similarity threshold remain unallocated.
 
 | Strategy | Purpose |
-|---|---|
+| --- | --- |
 | `semantic_walk` | Allocate each source to its best-matching target above the similarity threshold. |
 
 A convenience pipeline `run_semantic_pipeline` computes embeddings and similarity in one call.
