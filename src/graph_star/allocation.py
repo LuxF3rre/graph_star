@@ -11,6 +11,7 @@ from typing import Final, NewType
 import networkx as nx
 
 __all__ = [
+    "VALUE",
     "AllocationWithContext",
     "SourceToTargetAllocations",
     "TargetToSourceAllocations",
@@ -528,7 +529,7 @@ def greedy_optimization_walk(
         source_graph: The source graph built by `create_graph`.
         exclude_source_leaves: Source leaves to exclude from optimization.
         max_iterations: Maximum optimization iterations before stopping.
-            ``None`` removes the limit, iterating until convergence.
+            `None` removes the limit, iterating until convergence.
 
     Returns:
         Optimized allocation result.
