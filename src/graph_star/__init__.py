@@ -19,8 +19,11 @@ from graph_star.allocation import (
 from graph_star.allocation_runner import (
     run_annealing_pipeline,
     run_greedy_pipeline,
+    run_mixed_annealing_pipeline,
+    run_mixed_greedy_pipeline,
     run_semantic_pipeline,
 )
+from graph_star.mixed_allocation import mixed_exact_walk
 from graph_star.semantic_allocation import (
     Embeddings,
     SimilarityMatrix,
@@ -49,8 +52,11 @@ __all__ = [
     "invert_to_source_target",
     "invert_to_target_source",
     "leaf_nodes",
+    "mixed_exact_walk",
     "run_annealing_pipeline",
     "run_greedy_pipeline",
+    "run_mixed_annealing_pipeline",
+    "run_mixed_greedy_pipeline",
     "run_semantic_pipeline",
     "semantic_walk",
     "simulated_annealing_walk",
