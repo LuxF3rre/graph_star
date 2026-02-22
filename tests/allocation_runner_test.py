@@ -18,6 +18,8 @@ from graph_star.allocation import (
 from graph_star.allocation_runner import (
     run_annealing_pipeline,
     run_greedy_pipeline,
+    run_mixed_annealing_pipeline,
+    run_mixed_greedy_pipeline,
     run_semantic_pipeline,
 )
 
@@ -393,6 +395,298 @@ class TestRunSemanticPipeline:
         mock_load_st.assert_called_with("custom/model")
 
 
+class TestRunMixedGreedyPipeline:
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_produces_valid_allocation(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            rng = np.random.default_rng(42)
+            emb = rng.random((n, 64)).astype(np.float32)
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            return emb / norms
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_greedy_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+        )
+        assert isinstance(result, AllocationWithContext)
+        assert result.distance >= Decimal("0")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_perfect_match_yields_zero_distance(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            emb = np.eye(n, 8, dtype=np.float32)
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            return emb / norms
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_greedy_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+        )
+        assert result.distance == Decimal("0")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_model_name_forwarded(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        run_mixed_greedy_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            model_name="custom/model",
+        )
+        mock_load_st.assert_called_with("custom/model")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_unallocated_sets_are_correct_types(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_greedy_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+        )
+        assert isinstance(result.unallocated_source_leaves, frozenset)
+        assert isinstance(result.unallocated_target_leaves, frozenset)
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_parameters_forwarded(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_greedy_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            max_group_size=1,
+            exclude_source_leaves=["s1"],
+            max_iterations=1,
+        )
+        assert isinstance(result, AllocationWithContext)
+
+
+class TestRunMixedAnnealingPipeline:
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_produces_valid_allocation(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            rng = np.random.default_rng(42)
+            emb = rng.random((n, 64)).astype(np.float32)
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            return emb / norms
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_annealing_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            seed=42,
+        )
+        assert isinstance(result, AllocationWithContext)
+        assert result.distance >= Decimal("0")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_perfect_match_yields_zero_distance(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            emb = np.eye(n, 8, dtype=np.float32)
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            return emb / norms
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_annealing_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            seed=42,
+        )
+        assert result.distance == Decimal("0")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_model_name_forwarded(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        run_mixed_annealing_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            model_name="custom/model",
+            seed=42,
+        )
+        mock_load_st.assert_called_with("custom/model")
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_unallocated_sets_are_correct_types(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_annealing_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            seed=42,
+        )
+        assert isinstance(result.unallocated_source_leaves, frozenset)
+        assert isinstance(result.unallocated_target_leaves, frozenset)
+
+    @patch("graph_star.semantic_allocation._load_sentence_transformer")
+    def test_sa_parameters_forwarded(
+        self,
+        mock_load_st: MagicMock,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        mock_model = MagicMock()
+
+        def _encode(labels: list[str], **_kwargs: object) -> np.ndarray:
+            n = len(labels)
+            return np.eye(n, 8, dtype=np.float32)
+
+        mock_model.encode.side_effect = _encode
+        mock_load_st.return_value = mock_model
+
+        result = run_mixed_annealing_pipeline(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            temperature=Decimal("0.5"),
+            cooling_rate=Decimal("0.8"),
+            min_temperature=Decimal("0.1"),
+            iterations_per_temp=10,
+            seed=42,
+        )
+        assert isinstance(result, AllocationWithContext)
+
+
 class TestTopLevelImports:
     """Verify new symbols accessible from package root."""
 
@@ -404,3 +698,12 @@ class TestTopLevelImports:
 
     def test_run_semantic_pipeline_accessible(self) -> None:
         assert hasattr(graph_star, "run_semantic_pipeline")
+
+    def test_mixed_exact_walk_accessible(self) -> None:
+        assert hasattr(graph_star, "mixed_exact_walk")
+
+    def test_run_mixed_greedy_pipeline_accessible(self) -> None:
+        assert hasattr(graph_star, "run_mixed_greedy_pipeline")
+
+    def test_run_mixed_annealing_pipeline_accessible(self) -> None:
+        assert hasattr(graph_star, "run_mixed_annealing_pipeline")
