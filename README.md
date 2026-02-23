@@ -44,11 +44,11 @@ A convenience pipeline `run_semantic_pipeline` computes embeddings and similarit
 
 ### Mixed strategies
 
-Hybrid approach that uses semantic similarity to make smarter decisions during the numerical pipeline's exact matching phase. When multiple source-target pairs share the same value, `exact_walk` picks arbitrarily based on iteration order. `mixed_exact_walk` instead picks the most semantically similar pair, then continues with the standard greedy or annealing pipeline.
+Hybrid approach that uses semantic similarity to make smarter decisions during the numerical pipeline's exact matching phase. When multiple source-target pairs share the same value, `exact_walk` picks arbitrarily based on iteration order. `mixed_exact_walk` instead builds a unified candidate pool where all numerically exact matches — whether 1:1 or group-to-one — compete on cosine similarity, so the most semantically similar match always wins regardless of group size. The result then continues through the standard greedy or annealing pipeline.
 
 | Strategy | Purpose |
 | --- | --- |
-| `mixed_exact_walk` | Like `exact_walk`, but when values are equal, prefer the source-target pair with the highest embedding cosine similarity. For group matches, compare the average group embedding against the target. |
+| `mixed_exact_walk` | Like `exact_walk`, but all exact matches (1:1 and group) compete in a single pool sorted by embedding cosine similarity. For groups, the average source embedding is re-normalized before comparison. |
 
 Two convenience pipelines are provided:
 
