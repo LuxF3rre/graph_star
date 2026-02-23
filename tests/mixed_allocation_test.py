@@ -22,8 +22,8 @@ def _make_embeddings(vectors: list[list[float]]) -> Embeddings:
     return Embeddings((arr / norms).astype(np.float32))
 
 
-class TestMixedExactWalkPhaseOne:
-    """Phase 1: 1:1 matching with semantic preference."""
+class TestMixedExactWalkOneToOne:
+    """1:1 matching with semantic preference."""
 
     def test_prefers_semantically_similar_target_among_value_equals(self) -> None:
         """Two targets with same value; source picks the semantically closer one."""
@@ -124,8 +124,8 @@ class TestMixedExactWalkPhaseOne:
         assert "t1" in result.unallocated_target_leaves
 
 
-class TestMixedExactWalkPhaseTwo:
-    """Phase 2: group matching with semantic preference."""
+class TestMixedExactWalkGroupMatching:
+    """Group matching with semantic preference."""
 
     def test_group_match_prefers_semantically_similar_group(self) -> None:
         """Among groups with matching sum, picks closest to target embedding."""
@@ -346,3 +346,98 @@ class TestMixedExactWalkReturnTypes:
 
         assert isinstance(result.unallocated_source_leaves, frozenset)
         assert isinstance(result.unallocated_target_leaves, frozenset)
+
+
+class TestMixedExactWalkUnifiedPool:
+    """1:1 and group candidates compete in a single pool by similarity."""
+
+    def test_group_beats_one_to_one_when_semantically_superior(self) -> None:
+        """A group match wins over a 1:1 match when it is semantically closer."""
+        # t1=50.  s_solo=50 (1:1 candidate) but semantically distant.
+        # s_a=20 + s_b=30 = 50 (group candidate) and semantically close.
+        target_graph = create_graph(
+            nodes={"t_root": Decimal("50"), "t1": Decimal("50")},
+            edges={"t1": "t_root"},
+        )
+        target_leaves = leaf_nodes(graph=target_graph, skip_zeros=False)
+
+        source_graph = create_graph(
+            nodes={
+                "s_root": Decimal("100"),
+                "s_solo": Decimal("50"),
+                "s_a": Decimal("20"),
+                "s_b": Decimal("30"),
+            },
+            edges={"s_solo": "s_root", "s_a": "s_root", "s_b": "s_root"},
+        )
+        source_leaves = leaf_nodes(graph=source_graph, skip_zeros=False)
+
+        s_idx = {leaf: i for i, leaf in enumerate(source_leaves)}
+        t_idx = {leaf: i for i, leaf in enumerate(target_leaves)}
+
+        # s_a, s_b close to t1; s_solo orthogonal
+        s_vecs: list[list[float]] = [[0.0, 0.0, 0.0]] * len(source_leaves)
+        s_vecs[s_idx["s_solo"]] = [0.0, 0.0, 1.0]
+        s_vecs[s_idx["s_a"]] = [0.9, 0.1, 0.0]
+        s_vecs[s_idx["s_b"]] = [0.8, 0.2, 0.0]
+        source_emb = _make_embeddings(s_vecs)
+
+        t_vecs: list[list[float]] = [[0.0, 0.0, 0.0]] * len(target_leaves)
+        t_vecs[t_idx["t1"]] = [1.0, 0.0, 0.0]
+        target_emb = _make_embeddings(t_vecs)
+
+        result = mixed_exact_walk(
+            target_graph=target_graph,
+            target_leaves=target_leaves,
+            source_graph=source_graph,
+            source_leaves=source_leaves,
+            source_embeddings=source_emb,
+            target_embeddings=target_emb,
+        )
+
+        assert set(result.allocations["t1"]) == {"s_a", "s_b"}
+
+    def test_one_to_one_wins_when_semantically_superior_to_group(self) -> None:
+        """A 1:1 match wins over a group match when it is semantically closer."""
+        # Same numeric setup, but s_solo is close and s_a/s_b are distant.
+        target_graph = create_graph(
+            nodes={"t_root": Decimal("50"), "t1": Decimal("50")},
+            edges={"t1": "t_root"},
+        )
+        target_leaves = leaf_nodes(graph=target_graph, skip_zeros=False)
+
+        source_graph = create_graph(
+            nodes={
+                "s_root": Decimal("100"),
+                "s_solo": Decimal("50"),
+                "s_a": Decimal("20"),
+                "s_b": Decimal("30"),
+            },
+            edges={"s_solo": "s_root", "s_a": "s_root", "s_b": "s_root"},
+        )
+        source_leaves = leaf_nodes(graph=source_graph, skip_zeros=False)
+
+        s_idx = {leaf: i for i, leaf in enumerate(source_leaves)}
+        t_idx = {leaf: i for i, leaf in enumerate(target_leaves)}
+
+        # s_solo close to t1; s_a, s_b orthogonal
+        s_vecs: list[list[float]] = [[0.0, 0.0, 0.0]] * len(source_leaves)
+        s_vecs[s_idx["s_solo"]] = [0.9, 0.1, 0.0]
+        s_vecs[s_idx["s_a"]] = [0.0, 0.0, 1.0]
+        s_vecs[s_idx["s_b"]] = [0.0, 0.1, 0.9]
+        source_emb = _make_embeddings(s_vecs)
+
+        t_vecs: list[list[float]] = [[0.0, 0.0, 0.0]] * len(target_leaves)
+        t_vecs[t_idx["t1"]] = [1.0, 0.0, 0.0]
+        target_emb = _make_embeddings(t_vecs)
+
+        result = mixed_exact_walk(
+            target_graph=target_graph,
+            target_leaves=target_leaves,
+            source_graph=source_graph,
+            source_leaves=source_leaves,
+            source_embeddings=source_emb,
+            target_embeddings=target_emb,
+        )
+
+        assert result.allocations["t1"] == ["s_solo"]

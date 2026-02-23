@@ -56,19 +56,17 @@ def mixed_exact_walk(
     """Find exact-value allocations using semantic similarity to break ties.
 
     Replaces the arbitrary iteration-order matching of `exact_walk` with
-    semantically-informed matching: when multiple source-target pairs share
-    the same value, the pair with highest embedding similarity is preferred.
+    semantically-informed matching: all numerically exact matches — whether
+    1:1 or group-to-one — compete in a single candidate pool sorted by
+    cosine similarity, so the most semantically similar match always wins
+    regardless of group size.
 
-    **Phase 1 -- 1:1 matching:**
-    Collect all (source, target) pairs where `source_value == target_value`,
-    compute their cosine similarity, sort descending, and greedily assign
-    highest-similarity pairs first.
-
-    **Phase 2 -- group matching:**
-    For remaining unmatched sources, generate combinations (size 2 up to
-    `max_group_size`). For each group whose summed value equals a target
-    value, compute the average source embedding, re-normalize, and compare
-    against the target embedding. Greedily assign by descending similarity.
+    For each group size from 1 up to ``max_group_size``, every combination
+    of source leaves whose summed value equals a target leaf value is added
+    to the candidate pool.  A 1:1 match is simply a group of size 1.  For
+    groups of size >= 2 the average source embedding is re-normalized before
+    computing similarity.  All candidates are then sorted by descending
+    similarity and greedily assigned.
 
     Args:
         target_graph: The target graph built by `create_graph`.
@@ -80,7 +78,8 @@ def mixed_exact_walk(
         target_embeddings: L2-normalized embeddings for `target_leaves`,
             shape `(len(target_leaves), dim)`.
         max_group_size: Maximum number of sources to combine when searching
-            for group matches. `None` removes the limit.
+            for group matches. ``1`` disables groups. ``None`` removes the
+            limit.
 
     Returns:
         Allocation result with exact matches found, preferring semantic
@@ -89,17 +88,29 @@ def mixed_exact_walk(
     source_idx = {leaf: i for i, leaf in enumerate(source_leaves)}
     target_idx = {leaf: i for i, leaf in enumerate(target_leaves)}
 
-    # --- Phase 1: 1:1 matching with semantic preference ---
-    candidates: list[tuple[str, str, float]] = []
-    for source_leaf in source_leaves:
-        s_val = source_graph.nodes[source_leaf][VALUE]
-        for target_leaf in target_leaves:
-            if s_val == target_graph.nodes[target_leaf][VALUE]:
-                sim = _cosine_similarity(
-                    vec_a=source_embeddings[source_idx[source_leaf]],
-                    vec_b=target_embeddings[target_idx[target_leaf]],
-                )
-                candidates.append((source_leaf, target_leaf, sim))
+    n = len(source_leaves)
+    upper_bound = n + 1 if max_group_size is None else min(n + 1, max_group_size + 1)
+
+    # --- Unified candidate pool: 1:1 and group matches compete together ---
+    candidates: list[tuple[tuple[str, ...], str, float]] = []
+    for length in range(1, upper_bound):
+        for group in combinations(source_leaves, length):
+            total_value = sum(source_graph.nodes[leaf][VALUE] for leaf in group)
+            for target_leaf in target_leaves:
+                if total_value == target_graph.nodes[target_leaf][VALUE]:
+                    group_emb = np.mean(
+                        [source_embeddings[source_idx[s]] for s in group],
+                        axis=0,
+                    )
+                    if length > 1:
+                        norm = float(np.linalg.norm(group_emb))
+                        if norm > 0.0:
+                            group_emb = group_emb / norm
+                    sim = _cosine_similarity(
+                        vec_a=group_emb,
+                        vec_b=target_embeddings[target_idx[target_leaf]],
+                    )
+                    candidates.append((group, target_leaf, sim))
 
     candidates.sort(key=lambda c: c[2], reverse=True)
 
@@ -107,42 +118,7 @@ def mixed_exact_walk(
     used_sources: set[str] = set()
     used_targets: set[str] = set()
 
-    for source_leaf, target_leaf, _sim in candidates:
-        if source_leaf in used_sources or target_leaf in used_targets:
-            continue
-        allocations[target_leaf] = [source_leaf]
-        used_sources.add(source_leaf)
-        used_targets.add(target_leaf)
-
-    # --- Phase 2: group matching with semantic preference ---
-    remaining_sources = [s for s in source_leaves if s not in used_sources]
-    remaining_targets = [t for t in target_leaves if t not in used_targets]
-
-    n = len(remaining_sources)
-    upper_bound = n + 1 if max_group_size is None else min(n + 1, max_group_size + 1)
-
-    group_candidates: list[tuple[tuple[str, ...], str, float]] = []
-    for length in range(2, upper_bound):
-        for group in combinations(remaining_sources, length):
-            total_source_value = sum(source_graph.nodes[leaf][VALUE] for leaf in group)
-            for target_leaf in remaining_targets:
-                if total_source_value == target_graph.nodes[target_leaf][VALUE]:
-                    group_emb = np.mean(
-                        [source_embeddings[source_idx[s]] for s in group],
-                        axis=0,
-                    )
-                    norm = float(np.linalg.norm(group_emb))
-                    if norm > 0.0:
-                        group_emb = group_emb / norm
-                    sim = _cosine_similarity(
-                        vec_a=group_emb,
-                        vec_b=target_embeddings[target_idx[target_leaf]],
-                    )
-                    group_candidates.append((group, target_leaf, sim))
-
-    group_candidates.sort(key=lambda c: c[2], reverse=True)
-
-    for group, target_leaf, _sim in group_candidates:
+    for group, target_leaf, _sim in candidates:
         if target_leaf in used_targets or any(s in used_sources for s in group):
             continue
         allocations[target_leaf] = list(group)
