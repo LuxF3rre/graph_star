@@ -1,5 +1,7 @@
 """Mixed allocation using semantic similarity to break ties in exact matching."""
 
+from collections import defaultdict
+from decimal import Decimal
 from itertools import combinations
 
 import networkx as nx
@@ -10,8 +12,7 @@ from graph_star.allocation import (
     VALUE,
     AllocationWithContext,
     TargetToSourceAllocations,
-    distance,
-    evaluate_target_rollups,
+    _rollup_distance,
     get_unallocated_source_leaves,
     get_unallocated_target_leaves,
 )
@@ -27,11 +28,14 @@ def _cosine_similarity(
     vec_a: NDArray[np.float32],
     vec_b: NDArray[np.float32],
 ) -> float:
-    """Compute cosine similarity between two vectors.
+    """Compute cosine similarity between two L2-normalized vectors.
+
+    Both inputs must be L2-normalized, so the dot product equals cosine
+    similarity.
 
     Args:
-        vec_a: First vector.
-        vec_b: Second vector.
+        vec_a: First vector, L2-normalized.
+        vec_b: Second vector, L2-normalized.
 
     Returns:
         Cosine similarity in [-1, 1], or -1.0 if either vector has zero norm.
@@ -40,7 +44,7 @@ def _cosine_similarity(
     norm_b = float(np.linalg.norm(vec_b))
     if norm_a == 0.0 or norm_b == 0.0:
         return -1.0
-    return float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
+    return float(np.dot(vec_a, vec_b))
 
 
 def mixed_exact_walk(
@@ -68,6 +72,12 @@ def mixed_exact_walk(
     computing similarity.  All candidates are then sorted by descending
     similarity and greedily assigned.
 
+    Warning:
+        The candidate search generates C(n, k) combinations of **all**
+        source leaves for each group size k up to `max_group_size` — more
+        than `exact_walk`, which only combines leaves left over from its
+        1:1 phase. This grows rapidly; pass `None` with care.
+
     Args:
         target_graph: The target graph built by `create_graph`.
         target_leaves: Names of the target leaf nodes.
@@ -88,6 +98,12 @@ def mixed_exact_walk(
     source_idx = {leaf: i for i, leaf in enumerate(source_leaves)}
     target_idx = {leaf: i for i, leaf in enumerate(target_leaves)}
 
+    # Index targets by value so each group is matched with a single lookup
+    # instead of a scan over all targets.
+    targets_by_value: dict[Decimal, list[str]] = defaultdict(list)
+    for target_leaf in target_leaves:
+        targets_by_value[target_graph.nodes[target_leaf][VALUE]].append(target_leaf)
+
     n = len(source_leaves)
     upper_bound = n + 1 if max_group_size is None else min(n + 1, max_group_size + 1)
 
@@ -96,21 +112,23 @@ def mixed_exact_walk(
     for length in range(1, upper_bound):
         for group in combinations(source_leaves, length):
             total_value = sum(source_graph.nodes[leaf][VALUE] for leaf in group)
-            for target_leaf in target_leaves:
-                if total_value == target_graph.nodes[target_leaf][VALUE]:
-                    group_emb = np.mean(
-                        [source_embeddings[source_idx[s]] for s in group],
-                        axis=0,
-                    )
-                    if length > 1:
-                        norm = float(np.linalg.norm(group_emb))
-                        if norm > 0.0:
-                            group_emb = group_emb / norm
-                    sim = _cosine_similarity(
-                        vec_a=group_emb,
-                        vec_b=target_embeddings[target_idx[target_leaf]],
-                    )
-                    candidates.append((group, target_leaf, sim))
+            matching_targets = targets_by_value.get(total_value)
+            if not matching_targets:
+                continue
+            group_emb = np.mean(
+                [source_embeddings[source_idx[s]] for s in group],
+                axis=0,
+            )
+            if length > 1:
+                norm = float(np.linalg.norm(group_emb))
+                if norm > 0.0:
+                    group_emb = group_emb / norm
+            for target_leaf in matching_targets:
+                sim = _cosine_similarity(
+                    vec_a=group_emb,
+                    vec_b=target_embeddings[target_idx[target_leaf]],
+                )
+                candidates.append((group, target_leaf, sim))
 
     candidates.sort(key=lambda c: c[2], reverse=True)
 
@@ -132,13 +150,11 @@ def mixed_exact_walk(
 
     return AllocationWithContext(
         allocations=allocations,
-        distance=distance(
-            target_graph=evaluate_target_rollups(
-                target_graph=target_graph,
-                target_leaves=target_leaves,
-                source_graph=source_graph,
-                allocations=allocations,
-            ),
+        distance=_rollup_distance(
+            target_graph=target_graph,
+            target_leaves=target_leaves,
+            source_graph=source_graph,
+            allocations=allocations,
         ),
         unallocated_target_leaves=get_unallocated_target_leaves(
             target_leaves=target_leaves, allocations=allocations

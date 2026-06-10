@@ -144,12 +144,13 @@ def semantic_walk(
         defaultdict(list)
     )
 
-    for i, source_leaf in enumerate(source_leaves):
-        best_target_idx = int(np.argmax(similarity_matrix[i]))
-        best_similarity = float(similarity_matrix[i, best_target_idx])
+    if target_leaves:  # argmax is undefined on empty rows
+        for i, source_leaf in enumerate(source_leaves):
+            best_target_idx = int(np.argmax(similarity_matrix[i]))
+            best_similarity = float(similarity_matrix[i, best_target_idx])
 
-        if best_similarity >= similarity_threshold:
-            allocations[target_leaves[best_target_idx]].append(source_leaf)
+            if best_similarity >= similarity_threshold:
+                allocations[target_leaves[best_target_idx]].append(source_leaf)
 
     for target_leaf in target_leaves:
         if target_leaf not in allocations:
