@@ -1,7 +1,6 @@
 """Graph-based allocation optimizer for financial reconciliation."""
 
 from collections import defaultdict
-from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import combinations, count
@@ -79,7 +78,8 @@ def create_graph(
         A directed graph with `value` attributes on each node.
 
     Raises:
-        ValueError: If an edge references a node not present in `nodes`.
+        ValueError: If an edge references a node not present in `nodes`, or
+            if the edges form a cycle.
     """
     graph = nx.DiGraph()
 
@@ -92,6 +92,10 @@ def create_graph(
             msg = f"edge references unknown node(s): {', '.join(missing)}"
             raise ValueError(msg)
         graph.add_edge(child_node, parent_node)
+
+    if not nx.is_directed_acyclic_graph(graph):
+        msg = "edges contain a cycle; the graph must be a tree"
+        raise ValueError(msg)
 
     return graph
 
@@ -158,10 +162,18 @@ def invert_to_source_target(
 
     Returns:
         Mapping from source leaf to its assigned target leaf.
+
+    Raises:
+        ValueError: If a source leaf appears in more than one allocation.
+            The optimizer assumes each source is allocated at most once;
+            a silent overwrite here would corrupt downstream reporting.
     """
     inverted: SourceToTargetAllocations = SourceToTargetAllocations({})
     for target_leaf, list_source_leaves in allocations.items():
         for source_leaf in list_source_leaves:
+            if source_leaf in inverted:
+                msg = f"source leaf {source_leaf!r} is allocated more than once"
+                raise ValueError(msg)
             inverted[source_leaf] = target_leaf
 
     return inverted
@@ -190,6 +202,35 @@ def invert_to_target_source(
         if target_leaf not in reverted:
             reverted[target_leaf] = []
     return reverted
+
+
+def _copy_allocations(
+    *,
+    allocations: TargetToSourceAllocations,
+) -> TargetToSourceAllocations:
+    """Return a copy of an allocation mapping with fresh source lists."""
+    return TargetToSourceAllocations(
+        {target: list(sources) for target, sources in allocations.items()}
+    )
+
+
+def _normalized_allocations(
+    *,
+    allocations: TargetToSourceAllocations,
+    target_leaves: list[str],
+) -> TargetToSourceAllocations:
+    """Copy an allocation mapping, backfilling missing target leaves.
+
+    Walks mutate allocations by indexing target leaves directly, so every
+    target leaf must be present as a key. Callers may legally pass plain
+    dicts that omit unallocated targets; this normalizes them.
+    """
+    normalized: TargetToSourceAllocations = TargetToSourceAllocations(
+        {target_leaf: [] for target_leaf in target_leaves}
+    )
+    for target_leaf, sources in allocations.items():
+        normalized[target_leaf] = list(sources)
+    return normalized
 
 
 def get_unallocated_source_leaves(
@@ -240,9 +281,9 @@ def evaluate_target_rollups(
 ) -> nx.DiGraph:
     """Roll up allocated values through the target graph hierarchy.
 
-    Creates a deep copy of the target graph and sets an `allocated`
-    attribute on each node. Leaf nodes receive the sum of their allocated
-    source values; intermediate nodes receive the sum of their children's
+    Creates a copy of the target graph and sets an `allocated` attribute
+    on each node. Leaf nodes receive the sum of their allocated source
+    values; intermediate nodes receive the sum of their children's
     allocated values.
 
     Args:
@@ -254,7 +295,7 @@ def evaluate_target_rollups(
     Returns:
         A copy of the target graph with `allocated` attributes populated.
     """
-    _target_graph = deepcopy(target_graph)
+    _target_graph = target_graph.copy()
     _target_leaves = set(target_leaves)
     for node in _target_graph.nodes():
         _target_graph.nodes[node][ALLOCATED] = Decimal("0")
@@ -279,6 +320,59 @@ def evaluate_target_rollups(
             )
 
     return _target_graph
+
+
+def _rollup_distance(
+    *,
+    target_graph: nx.DiGraph,
+    target_leaves: list[str],
+    source_graph: nx.DiGraph,
+    allocations: TargetToSourceAllocations,
+    topo_order: list[str] | None = None,
+) -> Decimal:
+    """Compute the allocation distance without copying the target graph.
+
+    Equivalent to `distance(target_graph=evaluate_target_rollups(...))` but
+    rolls values up into a plain dict. Walks evaluate thousands of candidate
+    allocations, so this avoids a full graph copy and, when `topo_order` is
+    provided, a topological sort per evaluation.
+
+    Args:
+        target_graph: The target graph built by `create_graph`.
+        target_leaves: Names of the target leaf nodes.
+        source_graph: The source graph built by `create_graph`.
+        allocations: Current target-to-source allocation mapping.
+        topo_order: Pre-computed topological order of `target_graph`.
+            Computed on the fly when `None`.
+
+    Returns:
+        Non-negative total distance.
+    """
+    if topo_order is None:
+        topo_order = list(nx.topological_sort(target_graph))
+    _target_leaves = set(target_leaves)
+    allocated: dict[str, Decimal] = {}
+    total = Decimal("0")
+    for target_node in topo_order:
+        if target_node in _target_leaves:  # evaluate allocations from source
+            rolled_up = sum(
+                (
+                    source_graph.nodes[source_node][VALUE]
+                    for source_node in allocations.get(target_node, [])
+                ),
+                start=Decimal("0"),
+            )
+        else:  # evaluate rollup
+            rolled_up = sum(
+                (
+                    allocated[predecessor]
+                    for predecessor in target_graph.predecessors(target_node)
+                ),
+                start=Decimal("0"),
+            )
+        allocated[target_node] = rolled_up
+        total += abs(target_graph.nodes[target_node][VALUE] - rolled_up)
+    return total
 
 
 def find_best_allocation_with_ties(
@@ -339,42 +433,42 @@ def exact_walk(
     Returns:
         Allocation result with exact matches found.
     """
-    _target_leaves = list(target_leaves)
-    allocations: TargetToSourceAllocations = TargetToSourceAllocations({})
-    for source_leaf in source_leaves:
-        for target_leaf in _target_leaves:
-            if (
-                source_graph.nodes[source_leaf][VALUE]
-                == target_graph.nodes[target_leaf][VALUE]
-            ):
-                allocations[target_leaf] = [source_leaf]
-                _target_leaves.remove(target_leaf)
-                break
+    # Index available targets by value so each candidate is matched with a
+    # single lookup instead of a scan over all remaining targets.
+    available_targets_by_value: dict[Decimal, list[str]] = defaultdict(list)
+    for target_leaf in target_leaves:
+        available_targets_by_value[target_graph.nodes[target_leaf][VALUE]].append(
+            target_leaf
+        )
 
-    allocated_sources = invert_to_source_target(allocations=allocations)
+    allocations: TargetToSourceAllocations = TargetToSourceAllocations({})
+    allocated_sources: set[str] = set()
+    for source_leaf in source_leaves:
+        available = available_targets_by_value.get(
+            source_graph.nodes[source_leaf][VALUE]
+        )
+        if available:
+            allocations[available.pop(0)] = [source_leaf]
+            allocated_sources.add(source_leaf)
+
     source_leaves_for_potential_group_matches = [
         leaf for leaf in source_leaves if leaf not in allocated_sources
     ]
-    potential_group_matches: list[tuple[str, ...]] = []
     n = len(source_leaves_for_potential_group_matches)
     upper_bound = n + 1 if max_group_size is None else min(n + 1, max_group_size + 1)
     for length in range(2, upper_bound):
-        potential_group_matches.extend(
-            combinations(source_leaves_for_potential_group_matches, length)
-        )
-
-    for potential_group_match in potential_group_matches:
-        total_source_value = sum(
-            source_graph.nodes[leaf][VALUE] for leaf in potential_group_match
-        )
-        for target_leaf in _target_leaves:
-            if total_source_value == target_graph.nodes[target_leaf][VALUE] and not set(
-                potential_group_match
-            ).intersection(set(allocated_sources)):
-                allocations[target_leaf] = list(potential_group_match)
-                allocated_sources = invert_to_source_target(allocations=allocations)
-                _target_leaves.remove(target_leaf)
-                break
+        for potential_group_match in combinations(
+            source_leaves_for_potential_group_matches, length
+        ):
+            if any(leaf in allocated_sources for leaf in potential_group_match):
+                continue
+            total_source_value = sum(
+                source_graph.nodes[leaf][VALUE] for leaf in potential_group_match
+            )
+            available = available_targets_by_value.get(total_source_value)
+            if available:
+                allocations[available.pop(0)] = list(potential_group_match)
+                allocated_sources.update(potential_group_match)
 
     for target_leaf in target_leaves:
         if target_leaf not in allocations:
@@ -382,13 +476,11 @@ def exact_walk(
 
     return AllocationWithContext(
         allocations=allocations,
-        distance=distance(
-            target_graph=evaluate_target_rollups(
-                target_graph=target_graph,
-                target_leaves=target_leaves,
-                source_graph=source_graph,
-                allocations=allocations,
-            ),
+        distance=_rollup_distance(
+            target_graph=target_graph,
+            target_leaves=target_leaves,
+            source_graph=source_graph,
+            allocations=allocations,
         ),
         unallocated_target_leaves=get_unallocated_target_leaves(
             target_leaves=target_leaves, allocations=allocations
@@ -424,11 +516,12 @@ def greedy_walk(
         Allocation result after greedy assignment of all source leaves.
 
     Raises:
-        TypeError: If all source leaves are already allocated but
+        ValueError: If all source leaves are already allocated but
             `starting_allocations` is `None`.
     """
-    best_proposed_allocations: TargetToSourceAllocations = TargetToSourceAllocations(
-        defaultdict(list, starting_allocations or {})
+    best_proposed_allocations = _normalized_allocations(
+        allocations=starting_allocations or TargetToSourceAllocations({}),
+        target_leaves=target_leaves,
     )
 
     allocated = invert_to_source_target(allocations=best_proposed_allocations)
@@ -443,53 +536,50 @@ def greedy_walk(
                 " None when all source leaves are"
                 " allocated"
             )
-            raise TypeError(msg)
+            raise ValueError(msg)
 
         return AllocationWithContext(
-            allocations=starting_allocations,
-            distance=distance(
-                target_graph=evaluate_target_rollups(
-                    target_graph=target_graph,
-                    target_leaves=target_leaves,
-                    source_graph=source_graph,
-                    allocations=starting_allocations,
-                ),
+            allocations=best_proposed_allocations,
+            distance=_rollup_distance(
+                target_graph=target_graph,
+                target_leaves=target_leaves,
+                source_graph=source_graph,
+                allocations=best_proposed_allocations,
             ),
             unallocated_source_leaves=frozenset(unallocated_source_leaves),
             unallocated_target_leaves=get_unallocated_target_leaves(
                 target_leaves=target_leaves,
-                allocations=starting_allocations,
+                allocations=best_proposed_allocations,
             ),
         )
 
+    topo_order = list(nx.topological_sort(target_graph))
     best_distance: Decimal
     for source_leaf in unallocated_source_leaves:
-        potential_allocations: list[AllocationWithContext] = []
+        best_candidate: tuple[Decimal, TargetToSourceAllocations] | None = None
         for target_leaf in target_leaves:
-            proposed_allocation = deepcopy(best_proposed_allocations)
+            proposed_allocation = _copy_allocations(
+                allocations=best_proposed_allocations
+            )
             proposed_allocation[target_leaf].append(source_leaf)
-            proposed_allocation_distance = distance(
-                target_graph=evaluate_target_rollups(
-                    target_graph=target_graph,
-                    target_leaves=target_leaves,
-                    source_graph=source_graph,
-                    allocations=proposed_allocation,
-                ),
+            proposed_allocation_distance = _rollup_distance(
+                target_graph=target_graph,
+                target_leaves=target_leaves,
+                source_graph=source_graph,
+                allocations=proposed_allocation,
+                topo_order=topo_order,
             )
-            potential_allocations.append(
-                AllocationWithContext(
-                    allocations=proposed_allocation,
-                    distance=proposed_allocation_distance,
-                )
-            )
+            if (
+                best_candidate is None
+                or proposed_allocation_distance < best_candidate[0]
+            ):
+                best_candidate = (proposed_allocation_distance, proposed_allocation)
 
-        new_best_allocation = find_best_allocation_with_ties(
-            allocations_with_context=potential_allocations
-        )[0]
-        best_proposed_allocations = TargetToSourceAllocations(
-            deepcopy(new_best_allocation.allocations)
-        )
-        best_distance = new_best_allocation.distance
+        if best_candidate is None:
+            msg = "target_leaves must not be empty when source leaves are unallocated"
+            raise ValueError(msg)
+
+        best_distance, best_proposed_allocations = best_candidate
 
     return AllocationWithContext(
         allocations=best_proposed_allocations,
@@ -536,6 +626,10 @@ def greedy_optimization_walk(
     """
     if exclude_source_leaves is None:
         exclude_source_leaves = []
+    previous_best_proposed_allocations = _normalized_allocations(
+        allocations=previous_best_proposed_allocations,
+        target_leaves=target_leaves,
+    )
     all_source_leaves_with_explicit_exclusions = [
         leaf
         for leaf in invert_to_source_target(
@@ -558,6 +652,7 @@ def greedy_optimization_walk(
             ),
         )
 
+    topo_order = list(nx.topological_sort(target_graph))
     iterator = range(max_iterations) if max_iterations is not None else count()
     for _ in iterator:
         cached_inverted = invert_to_source_target(
@@ -578,13 +673,12 @@ def greedy_optimization_walk(
                     allocations=inverted_allocations,
                     target_leaves=target_leaves,
                 )
-                proposed_distance = distance(
-                    target_graph=evaluate_target_rollups(
-                        target_graph=target_graph,
-                        target_leaves=target_leaves,
-                        source_graph=source_graph,
-                        allocations=proposed_allocation,
-                    ),
+                proposed_distance = _rollup_distance(
+                    target_graph=target_graph,
+                    target_leaves=target_leaves,
+                    source_graph=source_graph,
+                    allocations=proposed_allocation,
+                    topo_order=topo_order,
                 )
                 proposed_allocations.append(
                     AllocationWithContext(
@@ -608,13 +702,12 @@ def greedy_optimization_walk(
                     allocations=inverted_allocations,
                     target_leaves=target_leaves,
                 )
-                proposed_distance = distance(
-                    target_graph=evaluate_target_rollups(
-                        target_graph=target_graph,
-                        target_leaves=target_leaves,
-                        source_graph=source_graph,
-                        allocations=proposed_allocation,
-                    ),
+                proposed_distance = _rollup_distance(
+                    target_graph=target_graph,
+                    target_leaves=target_leaves,
+                    source_graph=source_graph,
+                    allocations=proposed_allocation,
+                    topo_order=topo_order,
                 )
                 proposed_allocations.append(
                     AllocationWithContext(
@@ -636,13 +729,12 @@ def greedy_optimization_walk(
             proposed_allocations.append(
                 AllocationWithContext(
                     allocations=delete_allocation,
-                    distance=distance(
-                        target_graph=evaluate_target_rollups(
-                            target_graph=target_graph,
-                            target_leaves=target_leaves,
-                            source_graph=source_graph,
-                            allocations=delete_allocation,
-                        ),
+                    distance=_rollup_distance(
+                        target_graph=target_graph,
+                        target_leaves=target_leaves,
+                        source_graph=source_graph,
+                        allocations=delete_allocation,
+                        topo_order=topo_order,
                     ),
                 )
             )
@@ -655,21 +747,25 @@ def greedy_optimization_walk(
         ]
         for unattached_source_leaf in unattached_source_leaves:
             for target_leaf in target_leaves:
-                add_allocation = deepcopy(previous_best_proposed_allocations)
+                add_allocation = _copy_allocations(
+                    allocations=previous_best_proposed_allocations
+                )
                 add_allocation[target_leaf].append(unattached_source_leaf)
                 proposed_allocations.append(
                     AllocationWithContext(
                         allocations=add_allocation,
-                        distance=distance(
-                            target_graph=evaluate_target_rollups(
-                                target_graph=target_graph,
-                                target_leaves=target_leaves,
-                                source_graph=source_graph,
-                                allocations=add_allocation,
-                            ),
+                        distance=_rollup_distance(
+                            target_graph=target_graph,
+                            target_leaves=target_leaves,
+                            source_graph=source_graph,
+                            allocations=add_allocation,
+                            topo_order=topo_order,
                         ),
                     )
                 )
+
+        if not proposed_allocations:  # pragma: no cover - nothing left to propose
+            break
 
         new_best_allocation = find_best_allocation_with_ties(
             allocations_with_context=proposed_allocations
@@ -748,16 +844,19 @@ def simulated_annealing_walk(
         Best allocation found during the annealing process.
     """
     rng = Random(seed)  # noqa: S311
-    current_allocation = deepcopy(starting_allocation)
-    current_distance = distance(
-        target_graph=evaluate_target_rollups(
-            target_graph=target_graph,
-            target_leaves=target_leaves,
-            source_graph=source_graph,
-            allocations=current_allocation,
-        ),
+    topo_order = list(nx.topological_sort(target_graph))
+    current_allocation = _normalized_allocations(
+        allocations=starting_allocation,
+        target_leaves=target_leaves,
     )
-    best_allocation = deepcopy(current_allocation)
+    current_distance = _rollup_distance(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        allocations=current_allocation,
+        topo_order=topo_order,
+    )
+    best_allocation = _copy_allocations(allocations=current_allocation)
     best_distance = current_distance
 
     current_temp = temperature
@@ -787,7 +886,7 @@ def simulated_annealing_walk(
                 new_target_leaf = rng.choice(
                     [x for x in target_leaves if x != inverted[attached_source_leaf]]
                 )
-                proposed_allocation = deepcopy(current_allocation)
+                proposed_allocation = _copy_allocations(allocations=current_allocation)
                 old_target_leaf = inverted[attached_source_leaf]
                 proposed_allocation[old_target_leaf].remove(attached_source_leaf)
                 proposed_allocation[new_target_leaf].append(attached_source_leaf)
@@ -801,7 +900,7 @@ def simulated_annealing_walk(
                 target_leaf2 = inverted[source_leaf2]
                 if target_leaf1 == target_leaf2:
                     continue
-                proposed_allocation = deepcopy(current_allocation)
+                proposed_allocation = _copy_allocations(allocations=current_allocation)
                 proposed_allocation[target_leaf1].remove(source_leaf1)
                 proposed_allocation[target_leaf2].remove(source_leaf2)
                 proposed_allocation[target_leaf1].append(source_leaf2)
@@ -810,26 +909,25 @@ def simulated_annealing_walk(
             elif operation == "delete":
                 source_leaf = rng.choice(attached_source_leaves)
                 target_leaf = inverted[source_leaf]
-                proposed_allocation = deepcopy(current_allocation)
+                proposed_allocation = _copy_allocations(allocations=current_allocation)
                 proposed_allocation[target_leaf].remove(source_leaf)
 
             elif operation == "add":
                 source_leaf = rng.choice(unattached_source_leaves)
                 target_leaf = rng.choice(target_leaves)
-                proposed_allocation = deepcopy(current_allocation)
+                proposed_allocation = _copy_allocations(allocations=current_allocation)
                 proposed_allocation[target_leaf].append(source_leaf)
 
             if proposed_allocation is None:  # pragma: no cover
                 msg = "proposed_allocation must not be None after operation selection"
                 raise TypeError(msg)
 
-            proposed_distance = distance(
-                target_graph=evaluate_target_rollups(
-                    target_graph=target_graph,
-                    target_leaves=target_leaves,
-                    source_graph=source_graph,
-                    allocations=proposed_allocation,
-                ),
+            proposed_distance = _rollup_distance(
+                target_graph=target_graph,
+                target_leaves=target_leaves,
+                source_graph=source_graph,
+                allocations=proposed_allocation,
+                topo_order=topo_order,
             )
 
             delta = proposed_distance - current_distance
@@ -842,7 +940,7 @@ def simulated_annealing_walk(
                 current_distance = proposed_distance
 
                 if current_distance < best_distance:
-                    best_allocation = deepcopy(current_allocation)
+                    best_allocation = _copy_allocations(allocations=current_allocation)
                     best_distance = current_distance
 
         current_temp *= cooling_rate

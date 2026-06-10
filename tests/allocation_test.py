@@ -67,6 +67,13 @@ class TestCreateGraph:
                 edges={"a": "missing"},
             )
 
+    def test_cycle_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="cycle"):
+            create_graph(
+                nodes={"a": Decimal("1"), "b": Decimal("1")},
+                edges={"a": "b", "b": "a"},
+            )
+
 
 class TestLeafNodes:
     def test_returns_leaves_only(self, simple_target_graph: nx.DiGraph) -> None:
@@ -181,6 +188,16 @@ class TestInvertToSourceTarget:
         allocations = TargetToSourceAllocations({"t1": [], "t2": []})
         inverted = invert_to_source_target(allocations=allocations)
         assert inverted == {}
+
+    def test_duplicate_source_across_targets_raises_value_error(self) -> None:
+        allocations = TargetToSourceAllocations({"t1": ["s1"], "t2": ["s1"]})
+        with pytest.raises(ValueError, match="allocated more than once"):
+            invert_to_source_target(allocations=allocations)
+
+    def test_duplicate_source_within_target_raises_value_error(self) -> None:
+        allocations = TargetToSourceAllocations({"t1": ["s1", "s1"]})
+        with pytest.raises(ValueError, match="allocated more than once"):
+            invert_to_source_target(allocations=allocations)
 
 
 class TestInvertToTargetSource:
@@ -417,6 +434,32 @@ class TestExactWalk:
         # s3(40)=t2(40), s1(30)+s2(30)=t1(60)
         assert result.distance == Decimal("0")
 
+    def test_overlapping_group_candidates_skip_allocated_sources(self) -> None:
+        """A group sharing a source with an earlier match is skipped."""
+        target = create_graph(
+            nodes={"r": Decimal("70"), "t1": Decimal("30"), "t2": Decimal("40")},
+            edges={"t1": "r", "t2": "r"},
+        )
+        # (a, b) matches t1 first; the later overlapping (a, c) must be
+        # skipped even though it also sums to 30.
+        source = create_graph(
+            nodes={
+                "r": Decimal("50"),
+                "a": Decimal("10"),
+                "b": Decimal("20"),
+                "c": Decimal("20"),
+            },
+            edges={"a": "r", "b": "r", "c": "r"},
+        )
+        result = exact_walk(
+            target_graph=target,
+            target_leaves=["t1", "t2"],
+            source_graph=source,
+            source_leaves=["a", "b", "c"],
+        )
+        assert result.allocations["t1"] == ["a", "b"]
+        assert result.unallocated_source_leaves == frozenset({"c"})
+
     def test_max_group_size_none_searches_all(
         self,
         simple_target_graph: nx.DiGraph,
@@ -566,18 +609,31 @@ class TestGreedyWalk:
         )
         assert result.distance >= Decimal("0")
 
-    def test_all_allocated_without_starting_raises_type_error(
+    def test_all_allocated_without_starting_raises_value_error(
         self,
         simple_target_graph: nx.DiGraph,
         simple_target_leaves: list[str],
         simple_source_graph: nx.DiGraph,
     ) -> None:
-        with pytest.raises(TypeError, match="starting_allocations must not be"):
+        with pytest.raises(ValueError, match="starting_allocations must not be"):
             greedy_walk(
                 target_graph=simple_target_graph,
                 target_leaves=simple_target_leaves,
                 source_graph=simple_source_graph,
                 source_leaves=[],
+            )
+
+    def test_unallocated_sources_with_no_targets_raises_value_error(
+        self,
+        simple_target_graph: nx.DiGraph,
+        simple_source_graph: nx.DiGraph,
+    ) -> None:
+        with pytest.raises(ValueError, match="target_leaves must not be empty"):
+            greedy_walk(
+                target_graph=simple_target_graph,
+                target_leaves=[],
+                source_graph=simple_source_graph,
+                source_leaves=["s1"],
             )
 
     def test_all_allocated_with_starting_returns_result(
@@ -596,6 +652,40 @@ class TestGreedyWalk:
         )
         assert result.allocations == perfect_allocation
         assert result.distance == Decimal("0")
+
+    def test_all_allocated_result_does_not_alias_starting_allocations(
+        self,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        perfect_allocation: TargetToSourceAllocations,
+    ) -> None:
+        result = greedy_walk(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=["s1", "s2", "s3"],
+            starting_allocations=perfect_allocation,
+        )
+        assert result.allocations is not perfect_allocation
+        perfect_allocation["t1"].append("mutated")
+        assert "mutated" not in result.allocations["t1"]
+
+    def test_all_allocated_result_backfills_missing_target_keys(
+        self,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+    ) -> None:
+        starting = TargetToSourceAllocations({"t1": ["s1", "s2", "s3"]})
+        result = greedy_walk(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=["s1", "s2", "s3"],
+            starting_allocations=starting,
+        )
+        assert result.allocations["t2"] == []
 
 
 class TestGreedyOptimizationWalk:
@@ -643,6 +733,32 @@ class TestGreedyOptimizationWalk:
             source_graph=simple_source_graph,
         )
         assert result.distance <= suboptimal_distance
+
+    def test_accepts_plain_dict_missing_target_keys(
+        self,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+    ) -> None:
+        """Allocations omitting unallocated targets must not crash."""
+        suboptimal = TargetToSourceAllocations({"t1": ["s1", "s2", "s3"]})
+        suboptimal_evaluated = evaluate_target_rollups(
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            allocations=suboptimal,
+        )
+        suboptimal_distance = distance(target_graph=suboptimal_evaluated)
+
+        result = greedy_optimization_walk(
+            previous_best_proposed_allocations=suboptimal,
+            previous_best_distance=suboptimal_distance,
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+        )
+        assert result.distance <= suboptimal_distance
+        assert "t2" in result.allocations
 
     def test_handles_no_optimizable_leaves(
         self,
@@ -784,6 +900,26 @@ class TestSimulatedAnnealingWalk:
         )
         assert result1.distance == result2.distance
         assert result1.allocations == result2.allocations
+
+    def test_accepts_plain_dict_missing_target_keys(
+        self,
+        simple_target_graph: nx.DiGraph,
+        simple_target_leaves: list[str],
+        simple_source_graph: nx.DiGraph,
+        simple_source_leaves: list[str],
+    ) -> None:
+        """Starting allocation omitting unallocated targets must not crash."""
+        starting = TargetToSourceAllocations({"t1": ["s1", "s2", "s3"]})
+        result = simulated_annealing_walk(
+            starting_allocation=starting,
+            target_graph=simple_target_graph,
+            target_leaves=simple_target_leaves,
+            source_graph=simple_source_graph,
+            source_leaves=simple_source_leaves,
+            seed=7,
+        )
+        assert result.distance >= Decimal("0")
+        assert "t2" in result.allocations
 
     def test_produces_valid_result(
         self,

@@ -81,7 +81,7 @@ from graph_star import create_graph, leaf_nodes, run_greedy_pipeline
 source = create_graph(
     nodes={
         "total": Decimal("1000"),
-        "sales":Decimal("600"),
+        "sales": Decimal("600"),
         "interest income (expense)": Decimal("250"),
         "income (loss) from sale of equipment": Decimal("150"),
     },

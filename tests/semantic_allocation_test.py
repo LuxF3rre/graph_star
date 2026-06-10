@@ -279,6 +279,27 @@ class TestSemanticWalk:
 
         assert len(result.unallocated_source_leaves) == 2
 
+    def test_empty_target_leaves_leaves_all_sources_unallocated(
+        self,
+        semantic_target_graph: nx.DiGraph,
+        semantic_source_graph: nx.DiGraph,
+        semantic_source_leaves: list[str],
+    ) -> None:
+        sim = SimilarityMatrix(
+            np.zeros((len(semantic_source_leaves), 0), dtype=np.float32)
+        )
+
+        result = semantic_walk(
+            target_graph=semantic_target_graph,
+            target_leaves=[],
+            source_graph=semantic_source_graph,
+            source_leaves=semantic_source_leaves,
+            similarity_matrix=sim,
+        )
+
+        assert result.unallocated_source_leaves == frozenset(semantic_source_leaves)
+        assert all(not sources for sources in result.allocations.values())
+
     def test_shape_mismatch_raises_value_error(
         self,
         semantic_target_graph: nx.DiGraph,
