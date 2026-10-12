@@ -11,6 +11,13 @@ from graph_star.allocation import (
     greedy_walk,
     simulated_annealing_walk,
 )
+from graph_star.decision_allocation import (
+    DEFAULT_DECISION_MODEL,
+    DecisionModel,
+    decision_exact_walk,
+    decision_walk,
+    load_decision_model,
+)
 from graph_star.mixed_allocation import mixed_exact_walk
 from graph_star.semantic_allocation import (
     compute_embeddings,
@@ -20,6 +27,9 @@ from graph_star.semantic_allocation import (
 
 __all__ = [
     "run_annealing_pipeline",
+    "run_decision_annealing_pipeline",
+    "run_decision_greedy_pipeline",
+    "run_decision_pipeline",
     "run_greedy_pipeline",
     "run_mixed_annealing_pipeline",
     "run_mixed_greedy_pipeline",
@@ -303,6 +313,177 @@ def run_mixed_annealing_pipeline(
         source_graph=source_graph,
         source_leaves=source_leaves,
         starting_allocations=mixed_result.allocations,
+    )
+
+    return simulated_annealing_walk(
+        starting_allocation=greedy_result.allocations,
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        temperature=temperature,
+        cooling_rate=cooling_rate,
+        min_temperature=min_temperature,
+        iterations_per_temp=iterations_per_temp,
+        seed=seed,
+    )
+
+
+def run_decision_pipeline(
+    *,
+    target_graph: nx.DiGraph,
+    target_leaves: list[str],
+    source_graph: nx.DiGraph,
+    source_leaves: list[str],
+    decision_model: DecisionModel | None = None,
+    model_name: str = DEFAULT_DECISION_MODEL,
+    confidence_threshold: float = 0.5,
+) -> AllocationWithContext:
+    """Run decision-model-only allocation pipeline.
+
+    Args:
+        target_graph: The target graph built by `create_graph`.
+        target_leaves: Names of the target leaf nodes.
+        source_graph: The source graph built by `create_graph`.
+        source_leaves: Names of the source leaf nodes.
+        decision_model: Decision model to use, e.g. from
+            `http_decision_model`. Loaded locally from `model_name` when
+            `None`.
+        model_name: Hugging Face decision model identifier, used only when
+            `decision_model` is `None`.
+        confidence_threshold: Minimum probability of the chosen target for
+            allocation.
+
+    Returns:
+        Allocation result with model-chosen matches.
+    """
+    return decision_walk(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        decision_model=decision_model or load_decision_model(model_name=model_name),
+        confidence_threshold=confidence_threshold,
+    )
+
+
+def run_decision_greedy_pipeline(
+    *,
+    target_graph: nx.DiGraph,
+    target_leaves: list[str],
+    source_graph: nx.DiGraph,
+    source_leaves: list[str],
+    decision_model: DecisionModel | None = None,
+    model_name: str = DEFAULT_DECISION_MODEL,
+    max_group_size: int | None = 4,
+    exclude_source_leaves: list[str] | None = None,
+    max_iterations: int | None = 1000,
+) -> AllocationWithContext:
+    """Run decision_exact_walk -> greedy_walk -> greedy_optimization_walk.
+
+    Uses a decision model to break ties between conflicting exact matches,
+    then continues with the standard greedy pipeline.
+
+    Args:
+        target_graph: The target graph built by `create_graph`.
+        target_leaves: Names of the target leaf nodes.
+        source_graph: The source graph built by `create_graph`.
+        source_leaves: Names of the source leaf nodes.
+        decision_model: Decision model to use, e.g. from
+            `http_decision_model`. Loaded locally from `model_name` when
+            `None`.
+        model_name: Hugging Face decision model identifier, used only when
+            `decision_model` is `None`.
+        max_group_size: Maximum group size for exact matching.
+        exclude_source_leaves: Source leaves to exclude from optimization.
+        max_iterations: Maximum optimization iterations.
+
+    Returns:
+        Optimized allocation result.
+    """
+    exact_result = decision_exact_walk(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        decision_model=decision_model or load_decision_model(model_name=model_name),
+        max_group_size=max_group_size,
+    )
+
+    greedy_result = greedy_walk(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        starting_allocations=exact_result.allocations,
+    )
+
+    return greedy_optimization_walk(
+        previous_best_proposed_allocations=greedy_result.allocations,
+        previous_best_distance=greedy_result.distance,
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        exclude_source_leaves=exclude_source_leaves,
+        max_iterations=max_iterations,
+    )
+
+
+def run_decision_annealing_pipeline(
+    *,
+    target_graph: nx.DiGraph,
+    target_leaves: list[str],
+    source_graph: nx.DiGraph,
+    source_leaves: list[str],
+    decision_model: DecisionModel | None = None,
+    model_name: str = DEFAULT_DECISION_MODEL,
+    max_group_size: int | None = 4,
+    temperature: Decimal = Decimal("1"),
+    cooling_rate: Decimal = Decimal("0.95"),
+    min_temperature: Decimal = Decimal("0.01"),
+    iterations_per_temp: int = 100,
+    seed: int | None = None,
+) -> AllocationWithContext:
+    """Run decision_exact_walk -> greedy_walk -> simulated_annealing_walk.
+
+    Uses a decision model to break ties between conflicting exact matches,
+    then continues with the standard annealing pipeline.
+
+    Args:
+        target_graph: The target graph built by `create_graph`.
+        target_leaves: Names of the target leaf nodes.
+        source_graph: The source graph built by `create_graph`.
+        source_leaves: Names of the source leaf nodes.
+        decision_model: Decision model to use, e.g. from
+            `http_decision_model`. Loaded locally from `model_name` when
+            `None`.
+        model_name: Hugging Face decision model identifier, used only when
+            `decision_model` is `None`.
+        max_group_size: Maximum group size for exact matching.
+        temperature: Initial SA temperature.
+        cooling_rate: SA cooling rate.
+        min_temperature: SA minimum temperature.
+        iterations_per_temp: SA iterations per temperature step.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Best allocation found during the annealing process.
+    """
+    exact_result = decision_exact_walk(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        decision_model=decision_model or load_decision_model(model_name=model_name),
+        max_group_size=max_group_size,
+    )
+
+    greedy_result = greedy_walk(
+        target_graph=target_graph,
+        target_leaves=target_leaves,
+        source_graph=source_graph,
+        source_leaves=source_leaves,
+        starting_allocations=exact_result.allocations,
     )
 
     return simulated_annealing_walk(

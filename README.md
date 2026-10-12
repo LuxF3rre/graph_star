@@ -11,13 +11,13 @@ Graph-based allocation optimizer for mapping hierarchical financial reports betw
 
 Organizations routinely need to understand how concepts in one financial report map to another — for instance, how line items in a local-GAAP filing correspond to an IFRS standard. This is especially valuable at scale, where dozens of entity-level reports with different charts of accounts all need to be mapped to a single standard taxonomy. Doing this manually is tedious and error-prone; **graph_star** automates it.
 
-Financial statements like balance sheets and P&L reports are hierarchical: leaf accounts roll up through intermediate groupings into top-level totals. When converting between conventions, the chart-of-accounts structure differs and leaf accounts don't map one-to-one. **graph_star** finds the best mapping of source leaf accounts to target leaf accounts using three complementary approaches: **numerical allocation** minimizes the total value distance across all levels of the hierarchy, **semantic allocation** matches leaves by account-name similarity using sentence embeddings, and **mixed allocation** combines both — using semantic similarity to break ties during exact value matching before continuing with the numerical pipeline. The search space is combinatorial — with 50 source accounts and 30 target accounts there are 30⁵⁰ possible assignments — so brute force is out of the question and the library uses heuristic pipelines instead.
+Financial statements like balance sheets and P&L reports are hierarchical: leaf accounts roll up through intermediate groupings into top-level totals. When converting between conventions, the chart-of-accounts structure differs and leaf accounts don't map one-to-one. **graph_star** finds the best mapping of source leaf accounts to target leaf accounts using complementary approaches: **numerical allocation** minimizes the total value distance across all levels of the hierarchy, **semantic allocation** matches leaves by account-name similarity using sentence embeddings, **mixed allocation** combines both — using semantic similarity to break ties during exact value matching before continuing with the numerical pipeline — and **decision allocation** does the same with a typed decision model such as [Clef-Flash](https://huggingface.co/Cloudflare/clef-flash), either on its own or as the tie-breaker for numerical matching. The search space is combinatorial — with 50 source accounts and 30 target accounts there are 30⁵⁰ possible assignments — so brute force is out of the question and the library uses heuristic pipelines instead.
 
 ## How it works
 
 Source and target reports are modelled as directed trees where edges point from child to parent. Each node carries a `Decimal` value. The optimizer allocates source leaves to target leaves, rolls up the allocated values through the target hierarchy, and measures the absolute difference at every node.
 
-Two families of allocation strategy are provided:
+Several families of allocation strategy are provided:
 
 ### Numerical strategies
 
@@ -57,7 +57,30 @@ Two convenience pipelines are provided:
 | `run_mixed_greedy_pipeline` | `mixed_exact_walk` → `greedy_walk` → `greedy_optimization_walk` |
 | `run_mixed_annealing_pipeline` | `mixed_exact_walk` → `greedy_walk` → `simulated_annealing_walk` |
 
-Choose **numerical** when only values matter, **semantic** when only names matter, or **mixed** when both signals are available and you want the numerical pipeline to make semantically-informed tie-breaking decisions.
+### Decision strategies
+
+Uses a typed decision model — by default [`Cloudflare/clef-flash`](https://huggingface.co/Cloudflare/clef-flash) — that reads a state and a schema of questions and returns a probability for every allowed option. Every account is described to the model by its name and its ancestors in the hierarchy (e.g. `sales` under `revenue` → `total`), so the model sees more context than a single name embedding.
+
+| Strategy | Purpose |
+| --- | --- |
+| `decision_walk` | For each source leaf, ask a `choice` question whose options are the target leaves. Sources whose chosen target's confidence is below `confidence_threshold` remain unallocated. |
+| `decision_exact_walk` | Like `mixed_exact_walk`, but the decision model is the tie-breaker. Exact matches that compete with no other candidate are assigned without calling the model; only conflicting candidates are scored with a yes/no question ("do these sources represent the same concept as this target?") and greedily assigned by probability. |
+
+Three convenience pipelines are provided:
+
+| Pipeline | Steps |
+| --- | --- |
+| `run_decision_pipeline` | `decision_walk` |
+| `run_decision_greedy_pipeline` | `decision_exact_walk` → `greedy_walk` → `greedy_optimization_walk` |
+| `run_decision_annealing_pipeline` | `decision_exact_walk` → `greedy_walk` → `simulated_annealing_walk` |
+
+Each takes a `decision_model`. Build one with:
+
+- `http_decision_model(base_url=...)` — calls any server answering Jev/SystemOne `POST /v1/systemone` requests, e.g. Clef served by SGLang.
+- `load_decision_model(model_name=..., device=...)` — downloads the release and runs it in-process. This executes the `joint_schema_model.py` shipped with the release, needs a GPU-sized machine (Clef-Flash is 9B parameters), and a `transformers` version that supports its backbone. It is used by default when no `decision_model` is passed.
+- Any callable `(*, state, questions) -> answers` matching the `DecisionModel` protocol.
+
+Choose **numerical** when only values matter, **semantic** when only names matter, or **mixed** / **decision** when both signals are available and you want the numerical pipeline to make semantically-informed tie-breaking decisions — **mixed** with a lightweight embedding model, **decision** with a decision model that reasons over the account hierarchy.
 
 ## Installation
 
@@ -162,6 +185,27 @@ print(result.allocations)
 print(result.distance)
 ```
 
+For a decision model as the tie-breaker of the numerical pipeline, e.g. Clef-Flash served by SGLang:
+
+```python
+from graph_star import http_decision_model, run_decision_greedy_pipeline
+
+decision_model = http_decision_model(base_url="http://localhost:30000")
+
+result = run_decision_greedy_pipeline(
+    target_graph=target,
+    target_leaves=target_leaves,
+    source_graph=source,
+    source_leaves=source_leaves,
+    decision_model=decision_model,
+)
+
+print(result.allocations)
+print(result.distance)
+```
+
+For allocation by the decision model alone, use `run_decision_pipeline` with a `confidence_threshold`.
+
 ## Limitations
 
 ### Data quality
@@ -172,7 +216,7 @@ The numerical and mixed pipelines are somewhat resilient to small data inconsist
 
 Source leaves whose value is zero cannot be meaningfully attributed: assigning them to any target leaf produces no distance change, so the optimiser's placement is arbitrary. Similarly, source leaves that share the same value are interchangeable — swapping them between targets produces identical distances — so the specific assignment among equal-valued leaves is not unique.
 
-The **mixed strategy** mitigates this limitation. When multiple source-target pairs share the same value, `mixed_exact_walk` uses sentence-embedding cosine similarity to prefer the semantically closest match rather than picking arbitrarily. This means that even when values alone cannot distinguish between candidates, account-name similarity provides a meaningful tiebreaker — "Revenue from operations" will be matched to "Operating income" rather than to an unrelated account that happens to carry the same balance.
+The **mixed** and **decision** strategies mitigate this limitation. When multiple source-target pairs share the same value, `mixed_exact_walk` uses sentence-embedding cosine similarity to prefer the semantically closest match rather than picking arbitrarily. This means that even when values alone cannot distinguish between candidates, account-name similarity provides a meaningful tiebreaker — "Revenue from operations" will be matched to "Operating income" rather than to an unrelated account that happens to carry the same balance.
 
 ### Hierarchy granularity
 
@@ -182,11 +226,12 @@ The algorithm allocates whole source leaves — it cannot split a single source 
 - **Same granularity.** Straightforward; exact matching often resolves most leaves directly.
 - **Source less granular than target (few large source leaves, many small target leaves).** The algorithm still produces a useful result. Because the distance function sums the absolute difference at every node in the hierarchy (leaves *and* intermediates), it rewards allocations that are correct at aggregate levels even when individual leaf assignments are off. A coarse source leaf placed under a target subtree whose total matches will yield zero distance at every intermediate node above it, even though the leaf-level distances are non-zero. In practice this means the optimiser finds the "directionally correct" placement of large source amounts, but leaf-level precision is inherently limited by the source granularity.
 
-### Semantic and mixed allocation
+### Semantic, mixed and decision allocation
 
 - **Language.** The default model (`BAAI/bge-large-en-v1.5`) is English-centric. For other languages, pass a multilingual model name to the `model_name` parameter.
 - **Threshold tuning.** The `similarity_threshold` parameter (semantic pipeline only) controls the minimum cosine similarity for a match to be accepted. With the default bi-encoder model, scores are in [0, 1] and the default threshold is `0.75`. If you swap to a different model, check its model card on Hugging Face for the output range before setting a threshold. A practical approach: plot a histogram of each source's best-match score — the distribution is often bimodal and the valley between clusters is a natural threshold candidate.
-- **Name quality.** Semantic and mixed matching rely on account names being descriptive. Cryptic codes (e.g. "4110", "BS-A3") produce poor embeddings; consider enriching labels with descriptions before calling the pipeline.
+- **Decision model cost.** `decision_walk` makes one model call per source leaf, and `decision_exact_walk` one per *conflicting* exact-match candidate. Confidence and probability scales depend on the model; tune `confidence_threshold` the same way as `similarity_threshold`.
+- **Name quality.** Semantic, mixed and decision matching rely on account names being descriptive. Cryptic codes (e.g. "4110", "BS-A3") produce poor embeddings; consider enriching labels with descriptions before calling the pipeline.
 
 ## Development
 

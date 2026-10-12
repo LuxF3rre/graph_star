@@ -18,10 +18,21 @@ from graph_star.allocation import (
 )
 from graph_star.allocation_runner import (
     run_annealing_pipeline,
+    run_decision_annealing_pipeline,
+    run_decision_greedy_pipeline,
+    run_decision_pipeline,
     run_greedy_pipeline,
     run_mixed_annealing_pipeline,
     run_mixed_greedy_pipeline,
     run_semantic_pipeline,
+)
+from graph_star.decision_allocation import (
+    DEFAULT_DECISION_MODEL,
+    DecisionModel,
+    decision_exact_walk,
+    decision_walk,
+    http_decision_model,
+    load_decision_model,
 )
 from graph_star.mixed_allocation import mixed_exact_walk
 from graph_star.semantic_allocation import (
@@ -33,7 +44,9 @@ from graph_star.semantic_allocation import (
 )
 
 __all__ = [
+    "DEFAULT_DECISION_MODEL",
     "AllocationWithContext",
+    "DecisionModel",
     "Embeddings",
     "SimilarityMatrix",
     "SourceToTargetAllocations",
@@ -41,6 +54,8 @@ __all__ = [
     "compute_embeddings",
     "compute_similarity_matrix",
     "create_graph",
+    "decision_exact_walk",
+    "decision_walk",
     "distance",
     "evaluate_target_rollups",
     "exact_walk",
@@ -49,11 +64,16 @@ __all__ = [
     "get_unallocated_target_leaves",
     "greedy_optimization_walk",
     "greedy_walk",
+    "http_decision_model",
     "invert_to_source_target",
     "invert_to_target_source",
     "leaf_nodes",
+    "load_decision_model",
     "mixed_exact_walk",
     "run_annealing_pipeline",
+    "run_decision_annealing_pipeline",
+    "run_decision_greedy_pipeline",
+    "run_decision_pipeline",
     "run_greedy_pipeline",
     "run_mixed_annealing_pipeline",
     "run_mixed_greedy_pipeline",
