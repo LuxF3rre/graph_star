@@ -8,6 +8,7 @@ from graph_star.allocation import (
     create_graph,
     leaf_nodes,
 )
+from graph_star.decision_allocation import _load_clef
 from graph_star.semantic_allocation import (
     _load_sentence_transformer,
 )
@@ -17,6 +18,7 @@ from graph_star.semantic_allocation import (
 def _clear_model_caches() -> None:
     """Clear cached model instances between tests to avoid mock leaks."""
     _load_sentence_transformer.cache_clear()
+    _load_clef.cache_clear()
 
 
 @pytest.fixture
